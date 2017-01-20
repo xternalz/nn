@@ -18,11 +18,13 @@ target, they compute a gradient according to a given loss function.
     * [`AbsCriterion`](#nn.AbsCriterion): measures the mean absolute value of the element-wise difference between input;
     * [`SmoothL1Criterion`](#nn.SmoothL1Criterion): a smooth version of the AbsCriterion;
     * [`MSECriterion`](#nn.MSECriterion): mean square error (a classic);
+    * [`SpatialAutoCropMSECriterion`](#nn.SpatialAutoCropMSECriterion): Spatial mean square error when the input is spatially smaller than the target, by only comparing their spatial overlap;
     * [`DistKLDivCriterion`](#nn.DistKLDivCriterion): Kullback–Leibler divergence (for fitting continuous probability distributions);
   * Embedding criterions (measuring whether two inputs are similar or dissimilar):
     * [`HingeEmbeddingCriterion`](#nn.HingeEmbeddingCriterion): takes a distance as input;
     * [`L1HingeEmbeddingCriterion`](#nn.L1HingeEmbeddingCriterion): L1 distance between two inputs;
     * [`CosineEmbeddingCriterion`](#nn.CosineEmbeddingCriterion): cosine distance between two inputs;
+    * [`DistanceRatioCriterion`](#nn.DistanceRatioCriterion): Probabilistic criterion for training siamese model with triplets.
   * Miscelaneus criterions:
     * [`MultiCriterion`](#nn.MultiCriterion) : a weighted sum of other criterions each applied to the same input and target;
     * [`ParallelCriterion`](#nn.ParallelCriterion) : a weighted sum of other criterions each applied to a different input and target;
@@ -96,7 +98,7 @@ criterion.sizeAverage = false
 criterion = nn.ClassNLLCriterion([weights])
 ```
 
-The negative log likelihood criterion. It is useful to train a classication problem with `n` classes.
+The negative log likelihood criterion. It is useful to train a classification problem with `n` classes.
 If provided, the optional argument `weights` should be a 1D `Tensor` assigning weight to each of the classes.
 This is particularly useful when you have an unbalanced training set.
 
@@ -112,10 +114,10 @@ loss(x, class) = -x[class]
 ```
 
 or in the case of the `weights` argument it is specified as follows:
-
 ```lua
 loss(x, class) = -weights[class] * x[class]
 ```
+Due to the behaviour of the backend code, it is necessary to set sizeAverage to false when calculating losses *in non-batch mode*.
 
 The following is a code fragment showing how to make a gradient step given an input `x`, a desired output `y` (an integer `1` to `n`, in this case `n = 2` classes), a network `mlp` and a learning rate `learningRate`:
 
@@ -143,7 +145,7 @@ criterion = nn.CrossEntropyCriterion([weights])
 
 This criterion combines [`LogSoftMax`](#nn.LogSoftMax) and [`ClassNLLCriterion`](#nn.ClassNLLCriterion) in one single class.
 
-It is useful to train a classication problem with `n` classes.
+It is useful to train a classification problem with `n` classes.
 If provided, the optional argument `weights` should be a 1D `Tensor` assigning weight to each of the classes. This is particularly useful when you have an unbalanced training set.
 
 The `input` given through a `forward()` is expected to contain scores for each class: `input` has to be a 1D `Tensor` of size `n`.
@@ -161,7 +163,11 @@ or in the case of the `weights` argument being specified:
 ```lua
 loss(x, class) = weights[class] * (-x[class] + log(\sum_j exp(x[j])))
 ```
-
+Due to the behaviour of the backend code, it is necessary to set sizeAverage to false when calculating losses *in non-batch mode*.
+```lua
+crit = nn.CrossEntropyCriterion(weights)
+crit.nll.sizeAverage = false
+```
 The losses are averaged across observations for each minibatch.
 
 <a name="nn.ClassSimplexCriterion"/>
@@ -252,7 +258,7 @@ or in the case of the weights argument being specified:
 loss(o, t) = - 1/n sum_i weights[i] * (t[i] * log(o[i]) + (1 - t[i]) * log(1 - o[i]))
 ```
 
-This is used for measuring the error of a reconstruction in for example an auto-encoder. Note that the targets `t[i]` should be numbers between 0 and 1, for instance, the output of an [`nn.Sigmoid`](transfer.md#nn.Sigmoid) layer.
+This is used for measuring the error of a reconstruction in for example an auto-encoder. Note that the outputs `o[i]` should be numbers between 0 and 1, for instance, the output of an [`nn.Sigmoid`](transfer.md#nn.Sigmoid) layer and should be interpreted as the probability of predicting `t[i] = 1`. Note `t[i]` can be either 0 or 1.
 
 By default, the losses are averaged for each minibatch over observations *as well as* over dimensions. However, if the field `sizeAverage` is set to `false`, the losses are instead summed.
 
@@ -498,6 +504,25 @@ criterion.sizeAverage = false
 By default, the losses are averaged over observations for each minibatch. However, if the field `sizeAverage` is set to `false`, the losses are instead summed.
 
 
+<a name="nn.SpatialAutoCropMSECriterion"></a>
+## SpatialAutoCropMSECriterion ##
+
+```lua
+criterion = nn.SpatialAutoCropMSECriterion()
+```
+
+Creates a criterion that measures the mean squared error between the input and target, even if the target is spatially larger than the input. It achieves this by center-cropping the target to the same spatial resolution as the input, the mean squared error is then calculated between the input and this cropped target.
+
+If the input and cropped target tensors are `d`-dimensional `Tensor`s with a total of `n` elements, the sum operation operates over all the elements, and divides by `n`.
+
+The division by `n` can be avoided if one sets the internal variable `sizeAverage` to `false`:
+
+```lua
+criterion = nn.SpatialAutoCropMSECriterion()
+criterion.sizeAverage = false
+```
+
+
 <a name="nn.MultiCriterion"></a>
 ## MultiCriterion ##
 
@@ -705,6 +730,61 @@ For batched inputs, if the internal variable `sizeAverage` is equal to `true`, t
 
 By default, the losses are averaged over observations for each minibatch. However, if the field `sizeAverage` is set to `false`, the losses are instead summed.
 
+<a name="nn.DistanceRatioCriterion"></a>
+## DistanceRatioCriterion ##
+Ref A. [Unsupervised Learning through Spatial Contrasting](https://arxiv.org/pdf/1610.00243.pdf)
+
+```lua
+criterion = nn.DistanceRatioCriterion(sizeAverage)
+```
+
+This criterion is probabilistic treatment of margin cost. The model is trained using sample triplets `{Xs, Xa, Xd}` where `Xa` is anchor sample, `Xs` is sample similar to anchor sample and `Xd` is a sample not similar to anchor sample. Let `Ds` be distance between embeddings of `{Xs, Xa}` and `Dd` be distance between embeddings of `{Xa, Xd}` then the loss is defined as follow
+
+```lua
+   loss = -log( exp(-Ds) / ( exp(-Ds) + exp(-Dd) ) )
+```
+
+Sample example
+```lua
+   torch.setdefaulttensortype("torch.FloatTensor")
+
+   require 'nn'
+
+   -- triplet : with batchSize of 32 and dimensionality 512
+   sample = {torch.rand(32, 512), torch.rand(32, 512), torch.rand(32, 512)}
+
+   embeddingModel = nn.Sequential()
+   embeddingModel:add(nn.Linear(512, 96)):add(nn.ReLU())
+
+   tripleModel = nn.ParallelTable()
+   tripleModel:add(embeddingModel)
+   tripleModel:add(embeddingModel:clone('weight', 'bias', 
+                                        'gradWeight', 'gradBias'))
+   tripleModel:add(embeddingModel:clone('weight', 'bias',
+                                        'gradWeight', 'gradBias'))
+
+   -- Similar sample distance w.r.t anchor sample
+   posDistModel = nn.Sequential()
+   posDistModel:add(nn.NarrowTable(1,2)):add(nn.PairwiseDistance())
+
+   -- Different sample distance w.r.t anchor sample
+   negDistModel = nn.Sequential()
+   negDistModel:add(nn.NarrowTable(2,2)):add(nn.PairwiseDistance())
+
+   distanceModel = nn.ConcatTable():add(posDistModel):add(negDistModel)
+
+   -- Complete Model
+   model = nn.Sequential():add(tripleModel):add(distanceModel)
+
+   -- DistanceRatioCriterion
+   criterion = nn.DistanceRatioCriterion(true)
+
+   -- Forward & Backward
+   output = model:forward(sample)
+   loss   = criterion:forward(output)
+   dLoss  = criterion:backward(output)
+   model:backward(sample, dLoss)
+```
 
 <a name="nn.MarginRankingCriterion"></a>
 ## MarginRankingCriterion ##
