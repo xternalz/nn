@@ -10,7 +10,6 @@ function PixelShuffle:__init(scaleFactor, upscale)
    parent.__init(self)
    self.scaleFactor = scaleFactor
    self.scaleFactorSquared = self.scaleFactor^2
-   print(self.scaleFactor)
    self.upscale = upscale==nil and true or upscale
    local upscaleOrder, downscaleOrder = {1,2,5,3,6,4}, {1,2,4,6,3,5}
    self.permuteOrderFwd = self.upscale and upscaleOrder or downscaleOrder
